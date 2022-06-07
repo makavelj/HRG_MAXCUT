@@ -8,6 +8,8 @@ import numpy as np
 import argparse
 import copy
 import math
+import cvxpy as cp
+from scipy.linalg import sqrtm
 
 
 def HRG_generator(n, alpha, t, deg):
@@ -23,6 +25,7 @@ def HRG_generator(n, alpha, t, deg):
     G_all = nx.Graph();
     for u, v in edges:
         G_all.add_edge(u,v);
+
     connected_components = list(nx.connected_components(G_all));
     max_nodes = 0;
     indexCC = -1;
@@ -35,8 +38,11 @@ def HRG_generator(n, alpha, t, deg):
     G = nx.Graph();
     for u,v in G_temp.edges():
         G.add_edge(u,v);
+    n = len(G)
+    mapping = dict(zip(G, range(0, n)))
+    G = nx.relabel_nodes(G, mapping)
     node_positions = {};
-    for v in G_all.nodes():
+    for v in G.nodes():
         node_positions[v] = (radii[v]*math.cos(angles[v]),radii[v]*math.sin(angles[v]));
     return G, G_all,node_positions;
 
@@ -62,7 +68,7 @@ def drawGraph(G, nodePos, showNode=[], showNodeSets = None, title = ""):
 def drawCut(G, nodePos, cut, showNode=[], showNodeSets = None, title = ""):
     node_positions = nodePos;
     nx.draw_networkx(G, pos=node_positions, nodelist=list(cut[0]), node_color = 'yellow', with_labels = False);
-    nx.draw_networkx(G, pos=node_positions, nodelist=list(cut[1]), node_color = 'black', with_labels = False);
+    nx.draw_networkx(G, pos=node_positions, nodelist=list(cut[1]), node_color = 'red', with_labels = False);
     plt.title(title);
     plt.show();
 
@@ -104,10 +110,51 @@ def greedy_max_cut(G, initial_cut=None, seed=None, weight=None):
     partition = (cut, G.nodes - cut)
     return current_cut_size, partition
 
+def gw_max_cut(G, weight=None):
+    #relabel vertices
+    n = len(G)
+    mapping = dict(zip(G, range(0, n)))
+    G = nx.relabel_nodes(G, mapping)
+
+    #Declare a positive semidefinite matrix
+    A = cp.Variable((n, n), symmetric=True)
+
+    #Set diagonals 1
+    constraints = [A >> 0]
+    constraints += [
+        A[i, i] == 1 for i in range(n)
+    ]
+
+    #Set objective function accordingly to our relaxed version of the problem
+    edges = [e for e in G.edges]
+    objective = sum(0.5*(1-A[i,j]) for (i, j) in edges)
+
+    #solve positive semedefinite Matrix
+    prob = cp.Problem(cp.Maximize(objective), constraints)
+    prob.solve()
+
+    #get the vectors with norm ||x||_2 = 1
+    y = sqrtm(A.value)
+    #generate a random hyperplane
+    r = np.random.randn(n)
+    #pick labels according to the side of the hyperplane
+    y = np.sign(y @ r)
+
+    cut = {node for node in G.nodes() if y[node] > 0}
+    cut_size = nx.algorithms.cut_size(G, cut, weight=weight)
+    partition = (cut, G.nodes - cut)
+    return cut_size, partition
+
+
+
 n_Graph = [250, 500, 750, 1000]
 for g_n in n_Graph:
     G, G_all, pos = HRG_generator(g_n, 0.75, 0, 10)
-    print(len(G), len(G_all))
-    size, cut = greedy_max_cut(G)
-    print(size, nx.number_of_edges(G))
-    drawCut(G, pos, cut)
+    print("Giant Component size: ", len(G))
+    size_greedy, cut_greedy = greedy_max_cut(G)
+    print("Greedy Cut: ", size_greedy, nx.number_of_edges(G))
+    drawCut(G, pos, cut_greedy)
+
+    size_gw, cut_gw = gw_max_cut(G)
+    print("GW Cut: ", size_gw, nx.number_of_edges(G))
+    drawCut(G, pos, cut_gw)
